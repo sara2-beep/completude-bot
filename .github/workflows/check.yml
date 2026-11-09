@@ -1,0 +1,45 @@
+name: check-offres
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # toutes les ~10 min (GitHub peut retarder de quelques minutes)
+  workflow_dispatch:          # lancement manuel possible
+
+permissions:
+  contents: write             # pour enregistrer state/seen.json
+
+concurrency:
+  group: check-offres
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Chrome est déjà installé sur les runners : pas besoin de télécharger Chromium
+      - run: pip install -r requirements.txt
+
+      - name: Vérifier les nouvelles offres
+        run: python bot.py
+        env:
+          BROWSER_CHANNEL: chrome
+          COMPLETUDE_LOGIN: ${{ secrets.COMPLETUDE_LOGIN }}
+          COMPLETUDE_PASSWORD: ${{ secrets.COMPLETUDE_PASSWORD }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Enregistrer les offres déjà vues
+        if: always()
+        run: |
+          git config user.name "offres-bot"
+          git config user.email "offres-bot@users.noreply.github.com"
+          git add state/seen.json || true
+          git diff --cached --quiet || (git commit -m "maj offres vues" && git pull --rebase && git push)
