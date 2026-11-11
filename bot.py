@@ -9,7 +9,6 @@ import json
 import os
 import re
 import sys
-import traceback
 from pathlib import Path
 
 import requests
@@ -206,9 +205,20 @@ def fetch_offers():
                 "SudEstLongitude": lon + half,
             },
         }
-        r = ctx.request.post(f"{API}/cap/search", headers=headers, data=json.dumps(body))
-        if not r.ok:
-            raise RuntimeError(f"cap/search -> HTTP {r.status}")
+        last = None
+        for _ in range(3):
+            try:
+                r = ctx.request.post(
+                    f"{API}/cap/search", headers=headers, data=json.dumps(body), timeout=60000
+                )
+                if r.ok:
+                    break
+                last = f"HTTP {r.status}"
+            except Exception as e:
+                last = str(e).splitlines()[0][:150]
+            page.wait_for_timeout(5000)
+        else:
+            raise RuntimeError(f"cap/search : {last}")
         offers = r.json().get("Demandes", [])
         browser.close()
         return offers
@@ -220,11 +230,14 @@ def main():
     try:
         offers = fetch_offers()
     except Exception as e:
-        traceback.print_exc()
-        if not state.get("alerted"):
-            notify(f"⚠️ Le bot Complétude est en erreur : {e}")
+        msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+        reason = re.sub(r"Bearer\s+\S+", "Bearer ***", msg)[:200]
+        print("Erreur :", reason)  # pas de traceback complète : elle peut contenir le jeton
+        state["fails"] = state.get("fails", 0) + 1
+        if state["fails"] >= 3 and not state.get("alerted"):
+            notify(f"⚠️ Le bot Complétude est en erreur depuis plusieurs vérifications : {reason}")
             state["alerted"] = True
-            save_state(state)
+        save_state(state)
         sys.exit(1)
 
     ids = [o["IdDemande"] for o in offers]
@@ -242,6 +255,7 @@ def main():
                     notify(format_offer(o))
                 state["seen"].append(o["IdDemande"])
     state["alerted"] = False
+    state["fails"] = 0
     save_state(state)
 
 
